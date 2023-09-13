@@ -23,6 +23,11 @@ class Category:
         torrent_list = self.qbt.get_torrents({"category": "", "status_filter": "completed"})
         for torrent in torrent_list:
             new_cat = self.qbt.get_category(torrent.save_path)
+            if new_cat == 'Uncategorized':
+                logger.print_line(
+                    f"Skipping {torrent.name}", self.config.loglevel
+                )
+                continue
             self.update_cat(torrent, new_cat, False)
 
         # Change categories
