@@ -260,7 +260,7 @@ class ShareLimits:
 
             sort_by = max_seeding_torrents_options["sort_by"]
             sort_asc = max_seeding_torrents_options["sort_asc"]
-            allowed_sort_by = ["ratio", "seeding_time", "last_activity"]
+            allowed_sort_by = ["ratio", "seeding_time", "last_activity", "size"]
             default_sort_by = "last_activity"
             if sort_by not in allowed_sort_by:
                 logger.print_line(f"Invalid sort_by option: {sort_by}. Defaulting to {default_sort_by}.", self.config.loglevel)
