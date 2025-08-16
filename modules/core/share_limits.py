@@ -134,7 +134,7 @@ class ShareLimits:
                 logger.print_line(
                     logger.insert_space(f"- Torrents smaller than: {apply_first_to_smaller_than} MB", 3), self.config.loglevel
                 )
-                if apply_first_to_smaller_than
+                if apply_first_to_smaller_than > 0
                 else None
             )
             (
