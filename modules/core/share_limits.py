@@ -60,6 +60,11 @@ class ShareLimits:
             torrents = group_config["torrents"]
 
             if group_config["max_seeding_torrents"] > 0:
+                logger.separator(
+                    f"Checking Max Seeding Torrents for [Group {group_name}] [Priority {group_config['priority']}]",
+                    space=False,
+                    border=False,
+                )
                 torrents = self.filter_torrents_based_on_max_seeding_torrents_options(torrents, group_config)
 
             self.torrents_updated = []
