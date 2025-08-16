@@ -1,6 +1,7 @@
 import os
 from datetime import timedelta
 from time import time
+import math
 
 from modules import util
 from modules.util import is_tag_in_torrent
@@ -102,71 +103,79 @@ class ShareLimits:
         end_time = time()
         duration = end_time - start_time
         logger.debug(f"Share limits command completed in {duration:.2f} seconds")
-        
+
     def filter_torrents_based_on_max_seeding_torrents_options(self, torrents, group_config):
-        max_seeding_torrents_allowed = group_config["max_seeding_torrents"]
+        max_allowed = group_config.get("max_seeding_torrents", 0)
         n_torrents = len(torrents)
-        logger.print_line(f"{n_torrents} seeding out of {max_seeding_torrents_allowed} allowed.", self.config.loglevel)
+        logger.print_line(f"{n_torrents} seeding out of {max_allowed} allowed.", self.config.loglevel)
 
-        n_torrents_to_remove = n_torrents - max_seeding_torrents_allowed
-        if n_torrents_to_remove > 0:
-            logger.print_line(
-                f"=> Updating share limits for {n_torrents_to_remove} torrent{'s' if n_torrents_to_remove > 1 else ''}.",
-                self.config.loglevel,
-            )
-
-            max_seeding_torrents_options = group_config["max_seeding_torrents_options"]
-
-            sort_by = max_seeding_torrents_options["sort_by"]
-            apply_asc = max_seeding_torrents_options["apply_asc"]
-            allowed_sort_by = ["ratio", "seeding_time", "last_activity", "size"]
-            default_sort_by = "last_activity"
-            if sort_by not in allowed_sort_by:
-                logger.print_line(f"Invalid sort_by option: {sort_by}. Defaulting to {default_sort_by}.", self.config.loglevel)
-                sort_by = default_sort_by
-
-            logger.print_line("Priority share limits update for torrents meeting the following criteria:", self.config.loglevel)
-
-            logger.print_line(
-                logger.insert_space(f"- {sort_by.title().replace('_', ' ')}: {'low' if apply_asc else 'high'}", 3),
-                self.config.loglevel,
-            )
-            sorted_torrents = sorted(torrents, key=lambda torrent: torrent[sort_by], reverse=apply_asc)
-
-            apply_first_to_smaller_than = max_seeding_torrents_options["apply_first_to_smaller_than"]
-            apply_first_to_bigger_than = max_seeding_torrents_options["apply_first_to_bigger_than"]
-            (
-                logger.print_line(
-                    logger.insert_space(f"- Torrents smaller than: {apply_first_to_smaller_than} MB", 3), self.config.loglevel
-                )
-                if apply_first_to_smaller_than > 0
-                else None
-            )
-            (
-                logger.print_line(
-                    logger.insert_space(f"- Torrents bigger than: {apply_first_to_bigger_than} MB", 3), self.config.loglevel
-                )
-                if apply_first_to_bigger_than
-                else None
-            )
-
-            def mb_to_oct(mb):
-                return mb * 1024 * 1024
-
-            apply_first_to_smaller_than = mb_to_oct(apply_first_to_smaller_than)
-            apply_first_to_bigger_than = mb_to_oct(apply_first_to_bigger_than)
-
-            def filter_condition(torrent):
-                return apply_first_to_bigger_than <= torrent["size"] < apply_first_to_smaller_than
-
-            filtered_torrents = filter(lambda x: filter_condition(x), sorted_torrents)
-            non_filtered_torrents = filter(lambda x: not filter_condition(x), sorted_torrents)
-            all_torrents = list(non_filtered_torrents) + list(filtered_torrents)
-
-            return all_torrents[-n_torrents_to_remove:]  # Remove first the torrents that meet the filter condition
-        else:
+        n_to_remove = n_torrents - max_allowed
+        if n_to_remove <= 0:
             logger.print_line("=> No share limit updates needed.", self.config.loglevel)
             return []
+
+        logger.print_line(
+            f"=> Updating share limits for {n_to_remove} torrent{'s' if n_to_remove > 1 else ''}.",
+            self.config.loglevel,
+        )
+
+        opts = group_config.get("max_seeding_torrents_options", {}) or {}
+        sort_by = opts.get("sort_by", "last_activity")
+        apply_asc = bool(opts.get("apply_asc", True))
+        allowed_sort_by = {"ratio", "seeding_time", "last_activity", "size"}
+        if sort_by not in allowed_sort_by:
+            logger.print_line(
+                f"Invalid sort_by option: {sort_by}. Defaulting to last_activity.",
+                self.config.loglevel,
+            )
+            sort_by = "last_activity"
+
+        logger.print_line("Priority share limits update for torrents meeting the following criteria:",
+                          self.config.loglevel)
+        logger.print_line(
+            logger.insert_space(f"- {sort_by.title().replace('_', ' ')}: {'low' if apply_asc else 'high'}", 3),
+            self.config.loglevel,
+        )
+
+        # Correct sort direction: asc when apply_asc=True
+        sorted_torrents = sorted(
+            torrents,
+            key=lambda t: t.get(sort_by, 0),
+            reverse=not apply_asc,
+        )
+
+        def mb_to_bytes(mb: float | int) -> int:
+            return int(mb * 1024 * 1024)
+
+        smaller_mb = float(opts.get("apply_first_to_smaller_than", 0) or 0)
+        bigger_mb = float(opts.get("apply_first_to_bigger_than", 0) or 0)
+
+        if smaller_mb > 0:
+            logger.print_line(logger.insert_space(f"- Torrents smaller than: {smaller_mb:g} MB", 3),
+                              self.config.loglevel)
+        if bigger_mb > 0:
+            logger.print_line(logger.insert_space(f"- Torrents bigger than: {bigger_mb:g} MB", 3), self.config.loglevel)
+
+        upper = mb_to_bytes(smaller_mb) if smaller_mb > 0 else math.inf
+        lower = mb_to_bytes(bigger_mb) if bigger_mb > 0 else 0
+
+        # If bounds are inverted by config, swap to be safe
+        if lower > upper:
+            lower, upper = upper, lower
+
+        def in_priority_band(t: dict) -> bool:
+            size = t.get("size")
+            if size is None:
+                return False  # or True, depending on your policy
+            return lower <= size < upper
+
+        # Prioritize those in the band; keep relative order inside each group
+        prioritized = [t for t in sorted_torrents if in_priority_band(t)]
+        others = [t for t in sorted_torrents if not in_priority_band(t)]
+        all_torrents = others + prioritized  # prioritized are at the end
+
+        # Pick the last n_to_remove so we remove prioritized first; if not enough, spill to others
+        return all_torrents[-n_to_remove:]
 
     def cleanup_torrents_for_group(self, group_name, priority):
         """Deletes torrents that have reached the ratio/seed limit"""
