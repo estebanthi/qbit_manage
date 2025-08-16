@@ -45,6 +45,23 @@ def get_list(data, lower=False, split=True, int_list=False, upper=False):
         return [d.strip() for d in str(data).split(",")]
 
 
+
+def get_dict(data, lower=False, split=True):
+    """Return a dict from a string or dict."""
+    if data is None:
+        return None
+    elif isinstance(data, dict):
+        return data
+    elif isinstance(data, list):
+        return {d: None for d in data}
+    elif split is False:
+        return {str(data): None}
+    elif lower is True:
+        return {d.strip().lower(): None for d in str(data).split(",")}
+    else:
+        return {d.strip(): None for d in str(data).split(",")}
+
+
 def is_tag_in_torrent(check_tag, torrent_tags, exact=True):
     """Check if tag is in torrent_tags"""
     tags = get_list(torrent_tags)
@@ -406,22 +423,24 @@ class check:
         if find_and_replace_attribute(root_dict, attribute, data):
             yaml.save()
 
+
     def check_for_attribute(
-        self,
-        data,
-        attribute,
-        parent=None,
-        subparent=None,
-        test_list=None,
-        default=None,
-        do_print=True,
-        default_is_none=False,
-        req_default=False,
-        var_type="str",
-        min_int=0,
-        throw=False,
-        save=True,
-        make_dirs=False,
+            self,
+            data,
+            attribute,
+            parent=None,
+            subparent=None,
+            subsubparent=None,  # <-- already present; now fully supported
+            test_list=None,
+            default=None,
+            do_print=True,
+            default_is_none=False,
+            req_default=False,
+            var_type="str",
+            min_int=0,
+            throw=False,
+            save=True,
+            make_dirs=False,
     ):
         """
         Check for attribute in config.
@@ -429,72 +448,105 @@ class check:
         Args:
             data (dict): The configuration data to search.
             attribute (str): The name of the attribute key to search for.
-            parent (str, optional): The name of the top level attribute to search under. Defaults to None.
-            subparent (str, optional): The name of the second level attribute to search under. Defaults to None.
-            test_list (dict, optional): A dictionary of valid values for the attribute. Defaults to None.
-            default (any, optional): The default value to use if the attribute is not found. Defaults to None.
-            do_print (bool, optional): Whether to print warning messages. Defaults to True.
-            default_is_none (bool, optional): Whether to treat a None value as a valid default. Defaults to False.
-            req_default (bool, optional): Whether to raise an error if no default value is provided. Defaults to False.
-            var_type (str, optional): The expected type of the attribute value. Defaults to "str".
-            min_int (int, optional): The minimum value for an integer attribute. Defaults to 0.
-            throw (bool, optional): Whether to raise an error if the attribute value is invalid. Defaults to False.
-            save (bool, optional): Whether to save the default value to the config if it is used. Defaults to True.
-            make_dirs (bool, optional): Whether to create directories for path attributes if they do not exist. Defaults to False.
-
-        Returns:
-            any: The value of the attribute, or the default value if it is not found.
-
-        Raises:
-            Failed: If the attribute value is invalid or a required default value is missing.
+            parent (str, optional): Top level attribute to search under.
+            subparent (str, optional): Second level attribute to search under.
+            subsubparent (str, optional): Third level attribute to search under.
+            test_list (dict, optional): Valid values for the attribute.
+            default (any, optional): Default value to use if not found.
+            do_print (bool, optional): Whether to print warning messages.
+            default_is_none (bool, optional): Treat None as a valid default.
+            req_default (bool, optional): Raise if no default is provided.
+            var_type (str, optional): Expected type of the value.
+            min_int (int, optional): Minimum value for integer/float types.
+            throw (bool, optional): Raise on invalid value.
+            save (bool, optional): Save default back to config if used.
+            make_dirs (bool, optional): Create dirs for path attributes.
         """
         endline = ""
+
+        # -------- Navigate to the right nested dict (supports subsubparent) --------
+        # Example paths:
+        #   parent -> subparent -> subsubparent
+        #   parent -> subparent
+        #   parent
+        # If any link is missing, treat as not found and silence prints for that reason.
         if parent is not None:
-            if subparent is not None:
-                if data and parent in data and subparent in data[parent]:
-                    data = data[parent][subparent]
-                else:
-                    data = None
-                    do_print = False
+            if data and parent in data:
+                data = data[parent]
             else:
-                if data and parent in data:
-                    data = data[parent]
-                else:
-                    data = None
-                    do_print = False
+                data = None
+                do_print = False
 
         if subparent is not None:
-            text = f"{parent}->{subparent} sub-attribute {attribute}"
-        elif parent is None:
-            text = f"{attribute} attribute"
-        else:
-            text = f"{parent} sub-attribute {attribute}"
+            if data and subparent in data:
+                data = data[subparent]
+            else:
+                data = None
+                do_print = False
 
-        if data is None or attribute not in data or (attribute in data and data[attribute] is None and not default_is_none):
+        if subsubparent is not None:
+            if data and subsubparent in data:
+                data = data[subsubparent]
+            else:
+                data = None
+                do_print = False
+
+        # -------- Build human text for messages --------
+        if parent is None:
+            text = f"{attribute} attribute"
+            parent_path = None
+        else:
+            path = parent
+            if subparent is not None:
+                path += f"->{subparent}"
+            if subsubparent is not None:
+                path += f"->{subsubparent}"
+            text = f"{path} sub-attribute {attribute}"
+            parent_path = path  # used in errors/saves
+
+        # -------- Main existence checks --------
+        if data is None or attribute not in data or (
+                attribute in data and data[attribute] is None and not default_is_none):
             message = f"{text} not found"
+
+            # -------- Save default back into YAML when requested --------
             if parent and save is True:
                 yaml = YAML(self.config.config_path)
-                if subparent:
-                    endline = f"\n{subparent} sub-attribute {attribute} added to config"
-                    if subparent not in yaml.data[parent] or not yaml.data[parent][subparent]:
-                        yaml.data[parent][subparent] = {attribute: default}
-                    elif attribute not in yaml.data[parent]:
-                        if isinstance(yaml.data[parent][subparent], str):
-                            yaml.data[parent][subparent] = {attribute: default}
-                        yaml.data[parent][subparent][attribute] = default
+
+                # Ensure the parent containers exist in yaml.data
+                if parent not in yaml.data or yaml.data[parent] is None:
+                    yaml.data[parent] = {}
+
+                # Build/ensure nested structure based on provided parents
+                target = yaml.data[parent]
+
+                if subparent is not None:
+                    if subparent not in target or target[subparent] is None or isinstance(target[subparent], str):
+                        target[subparent] = {}
+                    target = target[subparent]
+
+                if subsubparent is not None:
+                    if subsubparent not in target or target[subsubparent] is None or isinstance(target[subsubparent],
+                                                                                                str):
+                        target[subsubparent] = {}
+                    target = target[subsubparent]
+
+                # Now `target` is the dict where attribute should live
+                if attribute not in target or (
+                        attribute in target and target[attribute] is None
+                ):
+                    target[attribute] = default
+                    if subsubparent is not None:
+                        endline = f"\n{subsubparent} sub-attribute {attribute} added to config"
+                    elif subparent is not None:
+                        endline = f"\n{subparent} sub-attribute {attribute} added to config"
                     else:
-                        endline = ""
+                        endline = f"\n{parent} sub-attribute {attribute} added to config"
                 else:
-                    endline = f"\n{parent} sub-attribute {attribute} added to config"
-                    if parent not in yaml.data or not yaml.data[parent]:
-                        yaml.data[parent] = {attribute: default}
-                    elif attribute not in yaml.data[parent] or (
-                        attribute in yaml.data[parent] and yaml.data[parent][attribute] is None
-                    ):
-                        yaml.data[parent][attribute] = default
-                    else:
-                        endline = ""
+                    endline = ""
+
                 yaml.save()
+
             if default_is_none and var_type in ["list", "int_list"]:
                 return []
         elif data[attribute] is None:
@@ -546,13 +598,9 @@ class check:
                     message = f"Unable to parse {text}, must be a valid time format."
                     throw = True
         elif var_type == "size_parse":
-            # Accepts values like "200MB", "1.5GB", "750MiB", "1024", case-insensitive
-            # Returns bytes as an integer
             try:
-                # If already an int and valid, treat as bytes
                 if isinstance(data[attribute], int) and data[attribute] >= min_int:
                     return int(data[attribute])
-                # If float-like numeric provided, also treat as bytes
                 if isinstance(data[attribute], float) and data[attribute] >= float(min_int):
                     return int(data[attribute])
                 parsed_bytes = parse_size_to_bytes(str(data[attribute]))
@@ -588,10 +636,14 @@ class check:
             return get_list(data[attribute], lower=True)
         elif var_type == "upper_list":
             return get_list(data[attribute], upper=True)
+        elif var_type == "dict":
+            return get_dict(data[attribute])
         elif test_list is None or data[attribute] in test_list:
             return data[attribute]
         else:
             message = f"{text}: {data[attribute]} is an invalid input"
+
+        # -------- Defaults & errors --------
         if var_type == "path" and default:
             default_path = os.path.abspath(default)
             if make_dirs and not os.path.exists(default_path):
@@ -605,25 +657,34 @@ class check:
             else:
                 message = f"no {text} found and the default path {default} could not be found"
             default = None
+
         if (default is not None or default_is_none) and not message:
             message = message + f" using {default} as default"
         message = message + endline
+
         if req_default and default is None:
-            raise Failed(f"Config Error: {attribute} attribute must be set under {parent}.")
+            # Use the full parent path in the error if available
+            where = parent_path if parent_path else "root"
+            raise Failed(f"Config Error: {attribute} attribute must be set under {where}.")
+
         options = ""
         if test_list:
             for option, description in test_list.items():
                 if len(options) > 0:
                     options = f"{options}\n"
                 options = f"{options}    {option} ({description})"
+
         if (default is None and not default_is_none) or throw:
             if len(options) > 0:
                 message = message + "\n" + options
             raise Failed(f"Config Error: {message}")
+
         if do_print:
             logger.print_line(f"Config Warning: {message}", "warning")
-            if data and attribute in data and data[attribute] and test_list is not None and data[attribute] not in test_list:
+            if data and attribute in data and data[attribute] and test_list is not None and data[
+                attribute] not in test_list:
                 logger.print_line(options)
+
         return default
 
 
